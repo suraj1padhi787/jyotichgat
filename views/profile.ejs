@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Update Profile Picture</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="login-box">
+        <h2>Change Profile Picture</h2>
+        <form action="/profile" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="user" value="<%= user %>">
+            <input type="file" name="pic" accept="image/*" required />
+            <button type="submit">Upload</button>
+        </form>
+        <a href="/chat?user=<%= user %>">Skip</a>
+    </div>
+</body>
+</html>

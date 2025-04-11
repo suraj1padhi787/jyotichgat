@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" href="/icons/app-icon.png">
+  <meta name="theme-color" content="#6b3eff">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#6b3eff">
+  <title>Private Chat - <%= user %></title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    .chat-sticker {
+      width: 160px;
+      height: auto;
+      border-radius: 12px;
+      object-fit: cover;
+      display: block;
+      background: #000;
+      pointer-events: auto;
+    }
+  </style>
+</head>
+<body>
+
+<audio id="notify" src="https://notificationsounds.com/storage/sounds/file-sounds-1150-pristine.mp3"></audio>
+
+<div class="chat-container">
+  <div class="header">
+    <div class="top-header">
+      <span>Chatting as <b><%= user %></b></span>
+      <a href="/profile" class="change-btn">Change Pic</a>
+    </div>
+    <div class="partner-status">Partner Status: <span id="partner-status">Loading...</span></div>
+  </div>
+
+  <div id="messages" class="messages" style="background-image: url('/profiles/<%= user === 'suraj' ? 'jyoti' : 'suraj' %>.png');">
+    <% chats.forEach(chat => { %>
+      <div class="message <%= chat.user === user ? 'my' : 'other' %>" id="msg-<%= chat.id %>" data-id="<%= chat.id %>" data-msg="<%= chat.msg %>">
+        <div class="bubble">
+          <img src="/profiles/<%= chat.user %>.png" class="profile-pic">
+          <% if(chat.reply){ %>
+            <div class="reply-indicator">Reply to: <%= chat.reply %></div>
+          <% } %>
+          <% if(chat.voice) { %>
+            <audio controls src="/uploads/<%= chat.voice %>" style="width:100%;"></audio>
+          <% } else if(chat.image && chat.image.endsWith('.mp4') && !chat.image.includes('uploads')) { %>
+            <video autoplay loop muted playsinline src="/stickers/<%= chat.image %>" class="chat-sticker"></video>
+          <% } else if(chat.image && chat.image.endsWith('.mp4')) { %>
+            <video controls autoplay src="/uploads/<%= chat.image %>" class="chat-video"></video>
+          <% } else if(chat.image) { %>
+            <img src="/uploads/<%= chat.image %>" class="chat-img">
+          <% } else { %>
+            <span class="msg-text"><%= chat.msg %></span>
+          <% } %>
+          <div class="time">
+            <%= chat.time %>
+            <% if (chat.user === user) { %>
+              <span class="status" id="status-<%= chat.id %>">
+                <% if (chat.status === 'seen') { %>👀<% } else if (chat.status === 'delivered') { %>📬<% } else { %>⏱️<% } %>
+              </span>
+            <% } %>
+          </div>
+          <% if(chat.user === user) { %>
+            <div class="actions">
+              <% if(!chat.voice && !chat.image) { %>
+                <button onclick="editMessage(<%= chat.id %>, `<%- (chat.msg || '').replace(/`/g, '\\`') %>`)">✏️</button>
+              <% } %>
+              <button onclick="deleteMessage(<%= chat.id %>)">🗑️</button>
+            </div>
+          <% } %>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+
+  <div id="typing-status" class="typing"></div>
+  <div id="reply-indicator" style="display:none; margin-bottom:5px; color:#555; font-size:13px;"></div>
+
+  <div id="animated-stickers-panel" style="display:none; padding:10px; background:#fff; border-top:1px solid #ccc;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <b>Animated Stickers</b>
+      <button onclick="toggleStickerPanel()">❌</button>
+    </div>
+    <div style="margin:10px 0;">
+      <input type="file" id="animated-sticker-upload" accept="video/mp4,image/gif" />
+      <button onclick="uploadAnimatedSticker()">➕ Add Sticker</button>
+    </div>
+    <div id="animated-sticker-list" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
+  </div>
+
+  <div style="text-align:center; margin-top:10px;">
+    <button onclick="toggleStickerPanel()" style="background:#6b3eff; color:white; border:none; padding:5px 12px; border-radius:8px;">🎞️ Animated Stickers</button>
+  </div>
+
+  <form id="send-form" class="input-area">
+    <input type="text" id="msg" autocomplete="off" placeholder="Type a message..." />
+    <label for="image-upload" class="file-btn">📷</label>
+    <input type="file" id="image-upload" accept="image/*,video/mp4" style="display: none;">
+    <button type="button" id="record-btn">🎙️</button>
+    <button type="submit">➤</button>
+  </form>
+  <span id="image-info"></span>
+</div>
+
+<div id="seen-popup" style="display:none; position:fixed; bottom:70px; left:50%; transform:translateX(-50%); background:#eee; padding:6px 12px; border-radius:8px; font-size:13px; box-shadow:0 2px 6px rgba(0,0,0,0.2); z-index:99;">Seen by receiver</div>
+
+<script>
+  const socket = io();
+  const user = '<%= user %>';
+  const form = document.getElementById('send-form');
+  const msgInput = document.getElementById('msg');
+  const imageUpload = document.getElementById('image-upload');
+  const messages = document.getElementById('messages');
+  const typingStatus = document.getElementById('typing-status');
+  const notify = document.getElementById('notify');
+  const seenPopup = document.getElementById('seen-popup');
+  let replyTo = null;
+
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function toggleStickerPanel() {
+    const panel = document.getElementById('animated-stickers-panel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  }
+
+  imageUpload.addEventListener('change', () => {
+    const info = document.getElementById('image-info');
+    info.innerHTML = imageUpload.files.length > 0 ? `📷 Selected: <b>${imageUpload.files[0].name}</b>` : '';
+    info.style.opacity = imageUpload.files.length > 0 ? 1 : 0;
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (imageUpload.files.length > 0) {
+      const formData = new FormData();
+      formData.append('file', imageUpload.files[0]);
+      fetch('/upload', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+          socket.emit('chat', { user, image: data.filename, reply: replyTo });
+          imageUpload.value = '';
+          document.getElementById('image-info').innerText = '';
+          replyTo = null;
+          document.getElementById('reply-indicator').style.display = 'none';
+        });
+    } else if (msgInput.value.trim()) {
+      socket.emit('chat', { user, msg: msgInput.value, reply: replyTo });
+      msgInput.value = '';
+      replyTo = null;
+      document.getElementById('reply-indicator').style.display = 'none';
+      socket.emit('stop-typing', { user });
+    }
+  });
+
+  socket.on('chat', (data) => {
+    const el = document.createElement('div');
+    el.id = "msg-" + data.id;
+    el.className = data.user === user ? 'message my' : 'message other';
+    el.dataset.msg = data.msg || data.image || data.voice || '';
+    el.dataset.id = data.id;
+
+    let media = '';
+    if (data.voice) media = `<audio controls src='/uploads/${data.voice}' style='width:100%'></audio>`;
+    else if (data.image && data.image.endsWith('.mp4') && !data.image.includes('uploads')) {
+      media = `<video autoplay loop muted playsinline src='/stickers/${data.image}' class='chat-sticker'></video>`;
+    }
+    else if (data.image && data.image.endsWith('.mp4')) {
+      media = `<video controls autoplay src='/uploads/${data.image}' class='chat-video'></video>`;
+    }
+    else if (data.image) media = `<img src='/uploads/${data.image}' class='chat-img'>`;
+    else media = `<span class='msg-text'>${data.msg}</span>`;
+
+    el.innerHTML = `<div class="bubble">
+      <img src="/profiles/${data.user}.png" class="profile-pic">
+      ${data.reply ? `<div class='reply-indicator'>Reply to: ${data.reply}</div>` : ''}
+      ${media}
+      <div class="time">${data.time} ${data.user === user ? `<span class="status" id="status-${data.id}">⏱️</span>` : ''}</div>
+      ${data.user === user ? `<div class="actions">
+        ${!data.voice && !data.image ? `<button onclick="editMessage(${data.id}, ${JSON.stringify(data.msg || '')})">✏️</button>` : ''}
+        <button onclick="deleteMessage(${data.id})">🗑️</button>
+      </div>` : ''}
+    </div>`;
+    messages.appendChild(el);
+    scrollToBottom();
+
+    if (data.user !== user) {
+      notify.play();
+      socket.emit('seen', parseInt(data.id));
+    }
+  });
+
+  function deleteMessage(id) {
+    if (confirm("Delete message?")) socket.emit('delete-message', { id, user });
+  }
+
+  socket.on('delete-message', (data) => {
+    const el = document.getElementById("msg-" + data.id);
+    if (el) el.remove();
+  });
+
+  function editMessage(id, oldMsg) {
+    const newMsg = prompt("Edit Message:", oldMsg);
+    if (newMsg && newMsg.trim()) socket.emit('edit-message', { id, newMsg, user });
+  }
+
+  socket.on('edit-message', (data) => {
+    const el = document.querySelector(`#msg-${data.id} .msg-text`);
+    if (el) el.innerText = data.newMsg;
+  });
+
+  msgInput.addEventListener('input', () => {
+    socket.emit(msgInput.value ? 'typing' : 'stop-typing', { user });
+  });
+
+  socket.on('typing', (data) => {
+    typingStatus.innerText = data.user + ' is typing...';
+  });
+  socket.on('stop-typing', () => {
+    typingStatus.innerText = '';
+  });
+
+  socket.on('status-update', ({ id, status }) => {
+    const el = document.getElementById('status-' + id);
+    if (el) el.innerText = status === 'seen' ? '👀' : status === 'delivered' ? '📬' : '⏱️';
+    if (status === 'seen') {
+      seenPopup.style.display = 'block';
+      setTimeout(() => seenPopup.style.display = 'none', 1500);
+    }
+  });
+
+  window.onload = scrollToBottom;
+  function uploadAnimatedSticker() {
+  const input = document.getElementById('animated-sticker-upload');
+  if (!input.files.length) return alert("Please select a file");
+  const file = input.files[0];
+  if (file.size > 20 * 1024 * 1024) return alert("Max size 20MB");
+
+  const formData = new FormData();
+  formData.append('sticker', file);
+
+  fetch('/upload-animated-sticker', {
+    method: 'POST',
+    body: formData
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.status === 'success') {
+      const container = document.getElementById('animated-sticker-list');
+      const wrapper = document.createElement('div');
+
+      const el = document.createElement('video');
+      el.src = `/stickers/${data.filename}`;
+      el.className = 'chat-sticker';
+      el.muted = true;
+      el.autoplay = true;
+      el.loop = true;
+      el.playsInline = true;
+      el.style.cursor = 'pointer';
+
+      el.onclick = () => socket.emit('chat', { user, image: data.filename });
+
+      const del = document.createElement('button');
+      del.textContent = '🗑️';
+      del.onclick = () => {
+        fetch('/delete-sticker/' + data.filename, { method: 'DELETE' })
+          .then(() => wrapper.remove());
+          if (data.status === 'success') {
+  // ... existing code
+  fetchStickers(); // ⬅️ Add this line
+}
+
+      };
+
+      wrapper.appendChild(el);
+      wrapper.appendChild(del);
+      container.appendChild(wrapper);
+      input.value = '';
+    } else {
+      alert("Upload failed: " + (data.msg || 'Unknown error'));
+    }
+  })
+  .catch(err => alert("Sticker upload error: " + err.message));
+}
+function fetchStickers() {
+  fetch('/get-animated-stickers')
+    .then(res => res.json())
+    .then(data => {
+      const container = document.getElementById('animated-sticker-list');
+      container.innerHTML = '';
+      data.forEach(file => {
+        const wrapper = document.createElement('div');
+
+        const el = document.createElement('video');
+        el.src = `/stickers/${file}`;
+        el.className = 'chat-sticker';
+        el.muted = true;
+        el.autoplay = true;
+        el.loop = true;
+        el.playsInline = true;
+        el.style.cursor = 'pointer';
+        el.onclick = () => socket.emit('chat', { user, image: file });
+
+        const del = document.createElement('button');
+        del.textContent = '🗑️';
+        del.onclick = () => {
+          fetch('/delete-sticker/' + file, { method: 'DELETE' })
+            .then(() => wrapper.remove());
+        };
+
+        wrapper.appendChild(el);
+        wrapper.appendChild(del);
+        container.appendChild(wrapper);
+      });
+    });
+}
+
+// Load stickers on refresh
+window.onload = () => {
+  scrollToBottom();
+  fetch('/get-animated-stickers')
+    .then(res => res.json())
+    .then(data => {
+      const container = document.getElementById('animated-sticker-list');
+      container.innerHTML = '';
+      data.forEach(file => {
+        const wrapper = document.createElement('div');
+        const el = document.createElement('video');
+        el.src = `/stickers/${file}`;
+        el.className = 'chat-sticker';
+        el.muted = true;
+        el.autoplay = true;
+        el.loop = true;
+        el.playsInline = true;
+        el.style.cursor = 'pointer';
+
+        el.onclick = () => socket.emit('chat', { user, image: file });
+
+        const del = document.createElement('button');
+        del.textContent = '🗑️';
+        del.onclick = () => {
+          fetch('/delete-sticker/' + file, { method: 'DELETE' })
+            .then(() => wrapper.remove());
+        };
+
+        wrapper.appendChild(el);
+        wrapper.appendChild(del);
+        container.appendChild(wrapper);
+      });
+    });
+};
+const recordBtn = document.getElementById('record-btn');
+let mediaRecorder;
+let audioChunks = [];
+
+recordBtn.addEventListener('click', async () => {
+  if (!mediaRecorder || mediaRecorder.state === "inactive") {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.start();
+    recordBtn.innerText = "⏹️"; // Change to stop icon
+
+    audioChunks = [];
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) {
+        audioChunks.push(e.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const formData = new FormData();
+      formData.append('voice', blob, 'voice.webm');
+
+      fetch('/upload-voice', {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          socket.emit('chat', { user, voice: data.filename });
+        }
+      });
+
+      recordBtn.innerText = "🎙️"; // Reset to mic icon
+    };
+  } else if (mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+  }
+});
+
+</script>
+
+</body>
+</html>
