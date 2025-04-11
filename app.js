@@ -23,7 +23,6 @@ db.serialize(() => {
 const users = JSON.parse(fs.readFileSync('./users.json', 'utf8'));
 
 // Middleware
-app.use(express.static(path.join(__dirname, 'public')));
 
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
