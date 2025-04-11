@@ -1,4 +1,5 @@
 const express = require('express');
+
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const fs = require('fs');
@@ -22,6 +23,8 @@ db.serialize(() => {
 const users = JSON.parse(fs.readFileSync('./users.json', 'utf8'));
 
 // Middleware
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
 app.use(express.static('public'));
